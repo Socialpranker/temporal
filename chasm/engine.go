@@ -86,6 +86,13 @@ type TransitionOptions struct {
 	ConflictPolicy BusinessIDConflictPolicy
 	RequestID      string
 	Speculative    bool
+	// IgnoreVersionedTransitionValidation, when set, skips consistency-token
+	// (version transition) validation of the component ref for the transition. The
+	// target component is resolved by path rather than by matching the version
+	// transitions captured in the ref, and staleness of the ref is not enforced.
+	// Set via [WithIgnoreVersionedTransitionValidation]; only applies to
+	// [UpdateComponent].
+	IgnoreVersionedTransitionValidation bool
 }
 
 type TransitionOption func(*TransitionOptions)
@@ -169,6 +176,20 @@ func WithRequestID(
 ) TransitionOption {
 	return func(opts *TransitionOptions) {
 		opts.RequestID = requestID
+	}
+}
+
+// WithIgnoreVersionedTransitionValidation configures the transition to skip
+// consistency-token (version transition) validation of the supplied component ref, so
+// the component is resolved by path and the ref's captured version transitions are not
+// matched or enforced for staleness. This option only applies to UpdateComponent().
+//
+// It is intended for the Nexus async-completion path: a completion may arrive with a
+// stale ref after a workflow reset/rebuild rewrites transition history, so the caller
+// must validate the completion by request ID rather than by version transition.
+func WithIgnoreVersionedTransitionValidation() TransitionOption {
+	return func(opts *TransitionOptions) {
+		opts.IgnoreVersionedTransitionValidation = true
 	}
 }
 
@@ -288,7 +309,9 @@ func UpdateWithStartExecution[C RootComponent, I any, O any](
 //     comment of the NewRef method in MutableContext.
 //
 // UpdateComponent applies updateFn to the component identified by the supplied component reference.
-// opts are currently ignored.
+//
+// The only opts currently honored is [WithIgnoreVersionedTransitionValidation], which skips
+// consistency-token (version transition) validation of the ref; other options are ignored.
 //
 // It returns the result, along with the new component reference. The returned reference may be
 // nil when updateFn deletes the component in the same transaction and the component is not the
@@ -305,6 +328,14 @@ func UpdateComponent[C any, R []byte | ComponentRef, I any, O any](
 	ref, err := convertComponentRef(r)
 	if err != nil {
 		return output, nil, err
+	}
+
+	var options TransitionOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+	if options.IgnoreVersionedTransitionValidation {
+		ref = ref.withoutVersionedTransitionValidation()
 	}
 
 	newSerializedRef, err := engineFromContext(ctx).UpdateComponent(

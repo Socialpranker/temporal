@@ -114,3 +114,42 @@ func (s *componentRefSuite) TestSerializeDeserialize() {
 	s.Equal(ref.ExecutionKey, deserializedRef.ExecutionKey)
 	s.Equal(ref.componentPath, deserializedRef.componentPath)
 }
+
+func (s *componentRefSuite) TestWithoutVersionedTransitionValidation() {
+	executionKey := ExecutionKey{
+		NamespaceID: primitives.NewUUID().String(),
+		BusinessID:  primitives.NewUUID().String(),
+		RunID:       primitives.NewUUID().String(),
+	}
+	ref := ComponentRef{
+		ExecutionKey:    executionKey,
+		archetypeID:     WorkflowArchetypeID,
+		executionGoType: reflect.TypeFor[*TestComponent](),
+		executionLastUpdateVT: &persistencespb.VersionedTransition{
+			NamespaceFailoverVersion: rand.Int63(),
+			TransitionCount:          rand.Int63(),
+		},
+		componentPath: []string{primitives.NewUUID().String()},
+		componentInitialVT: &persistencespb.VersionedTransition{
+			NamespaceFailoverVersion: rand.Int63(),
+			TransitionCount:          rand.Int63(),
+		},
+	}
+
+	stripped := ref.withoutVersionedTransitionValidation()
+
+	// The version-transition fields are cleared so that staleness and
+	// component-identity checks that key off them are skipped.
+	s.Nil(stripped.executionLastUpdateVT)
+	s.Nil(stripped.componentInitialVT)
+
+	// All other identity fields are preserved.
+	s.Equal(executionKey, stripped.ExecutionKey)
+	s.Equal(ref.archetypeID, stripped.archetypeID)
+	s.Equal(ref.executionGoType, stripped.executionGoType)
+	s.Equal(ref.componentPath, stripped.componentPath)
+
+	// The receiver is not mutated (value receiver returns a copy).
+	s.NotNil(ref.executionLastUpdateVT)
+	s.NotNil(ref.componentInitialVT)
+}

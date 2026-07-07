@@ -80,6 +80,20 @@ func NewComponentRefByArchetypeID(
 	}
 }
 
+// withoutVersionedTransitionValidation returns a copy of the ref with its
+// consistency-token (version transition) fields cleared. Both the execution-level
+// staleness check ([Node.IsStale]) and the component-identity check ([Node.Component])
+// are skipped when these fields are nil, so the target component is resolved by path
+// alone rather than by matching the ref's captured version transitions.
+//
+// This backs [WithIgnoreVersionedTransitionValidation]; see that option for the
+// rationale (async Nexus completions arriving with a stale ref after a reset/rebuild).
+func (r ComponentRef) withoutVersionedTransitionValidation() ComponentRef {
+	r.executionLastUpdateVT = nil
+	r.componentInitialVT = nil
+	return r
+}
+
 func (r *ComponentRef) ArchetypeID(
 	registry *Registry,
 ) (ArchetypeID, error) {
