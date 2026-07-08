@@ -276,12 +276,14 @@ func TelemetryInterceptorProvider(
 func HealthSignalAggregatorProvider(
 	dynamicCollection *dynamicconfig.Collection,
 	logger log.ThrottledLogger,
-) interceptor.HealthSignalAggregator {
+) (interceptor.HealthSignalAggregator, error) {
 	return interceptor.NewHealthSignalAggregator(
 		logger,
 		dynamicconfig.HistoryHealthSignalMetricsEnabled.Get(dynamicCollection),
+		dynamicconfig.HistoryHealthSignalUsePercentiles.Get(dynamicCollection),
 		dynamicconfig.PersistenceHealthSignalWindowSize.Get(dynamicCollection)(),
 		dynamicconfig.PersistenceHealthSignalBufferSize.Get(dynamicCollection)(),
+		dynamicconfig.HistoryHealthSignalLatencyWindowCount.Get(dynamicCollection)(),
 	)
 }
 

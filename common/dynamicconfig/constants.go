@@ -250,6 +250,17 @@ response to a StartWorkflowExecution request and skipping the trip through match
 		true,
 		`HistoryHealthSignalMetricsEnabled determines whether history service RPC metrics are emitted`,
 	)
+	HistoryHealthSignalLatencyWindowCount = NewGlobalIntSetting(
+		"system.historyHealthSignalLatencyWindowCount",
+		10,
+		`historyHealthSignalLatencyWindowCount is the number of signal windows to compute latencies over`,
+	)
+	// TODO: This should be removed once percentiles are the default.
+	HistoryHealthSignalUsePercentiles = NewGlobalBoolSetting(
+		"system.historyHealthSignalUserPercentiles",
+		false,
+		`historyHealthSignalUserPercentiles controls whether we use the p99 latency for health checking instead of the mean latency`,
+	)
 	PersistenceHealthSignalAggregationEnabled = NewGlobalBoolSetting(
 		"system.persistenceHealthSignalAggregationEnabled",
 		true,
