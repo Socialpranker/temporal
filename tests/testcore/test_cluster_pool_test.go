@@ -12,8 +12,8 @@ func TestGlobalOverridesSurviveTestCleanup(t *testing.T) {
 	var dcClient *dynamicconfig.MemoryClient
 
 	t.Run("create", func(t *testing.T) {
-		impl := newTemporal(t, &TemporalParams{
-			ClusterMetadataConfig: &cluster.Config{},
+		impl := newTemporal(t, &temporalParams{
+			clusterMetadataConfig: &cluster.Config{},
 		})
 		dcClient = impl.dcClient
 	})
