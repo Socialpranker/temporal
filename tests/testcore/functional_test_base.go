@@ -24,7 +24,6 @@ import (
 	"go.temporal.io/server/api/adminservice/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common"
-	"go.temporal.io/server/common/archiver/provider"
 	"go.temporal.io/server/common/config"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
@@ -33,7 +32,6 @@ import (
 	"go.temporal.io/server/common/payloads"
 	"go.temporal.io/server/common/persistence"
 	persistencetests "go.temporal.io/server/common/persistence/persistence-tests"
-	"go.temporal.io/server/common/persistence/sql/sqlplugin/sqlite"
 	"go.temporal.io/server/common/primitives/timestamp"
 	"go.temporal.io/server/common/rpc"
 	"go.temporal.io/server/common/searchattribute"
@@ -46,6 +44,7 @@ import (
 	"go.temporal.io/server/common/testing/testtelemetry"
 	"go.temporal.io/server/common/testing/updateutils"
 	"go.temporal.io/server/components/nexusoperations"
+	"go.temporal.io/server/temporal"
 )
 
 type (
@@ -91,18 +90,17 @@ type (
 	}
 	// TestClusterParams contains the variables which are used to configure test cluster via the TestClusterOption type.
 	TestClusterParams struct {
-		DCRedirectionPolicy             config.DCRedirectionPolicy
-		DynamicConfigOverrides          map[dynamicconfig.Key]any
-		ArchivalEnabled                 bool
-		EnableMTLS                      bool
-		EnableWorkerService             bool
-		FaultInjectionConfig            *config.FaultInjection
-		NumHistoryShards                int32
-		Logger                          log.Logger
-		SharedCluster                   bool
-		EnableHistoryTaskRecorder       bool
-		CustomHistoryArchiverFactory    provider.CustomHistoryArchiverFactory
-		CustomVisibilityArchiverFactory provider.CustomVisibilityArchiverFactory
+		DCRedirectionPolicy       config.DCRedirectionPolicy
+		DynamicConfigOverrides    map[dynamicconfig.Key]any
+		EnableMTLS                bool
+		EnableWorkerService       bool
+		FaultInjectionConfig      *config.FaultInjection
+		NumHistoryShards          int32
+		Logger                    log.Logger
+		SharedCluster             bool
+		EnableHistoryTaskRecorder bool
+		ConfigureServer           func(*config.Config)
+		AdditionalServerOptions   []temporal.ServerOption
 	}
 	TestClusterOption func(params *TestClusterParams)
 )
@@ -130,9 +128,38 @@ func WithDynamicConfigOverrides(overrides map[dynamicconfig.Key]any) TestCluster
 	}
 }
 
-func WithArchivalEnabled() TestClusterOption {
+func withArchivalConfig() TestClusterOption {
 	return func(params *TestClusterParams) {
-		params.ArchivalEnabled = true
+		params.ConfigureServer = func(cfg *config.Config) {
+			filestoreArchiver := &config.FilestoreArchiver{
+				FileMode: "0666",
+				DirMode:  "0766",
+			}
+			cfg.Archival.History = config.HistoryArchival{
+				State:      config.ArchivalEnabled,
+				EnableRead: true,
+				Provider: &config.HistoryArchiverProvider{
+					Filestore: filestoreArchiver,
+				},
+			}
+			cfg.Archival.Visibility = config.VisibilityArchival{
+				State:      config.ArchivalEnabled,
+				EnableRead: true,
+				Provider: &config.VisibilityArchiverProvider{
+					Filestore: filestoreArchiver,
+				},
+			}
+			cfg.NamespaceDefaults.Archival = config.ArchivalNamespaceDefaults{
+				History: config.HistoryArchivalNamespaceDefaults{
+					State: config.ArchivalEnabled,
+					URI:   "testScheme://test/history/archive/path",
+				},
+				Visibility: config.VisibilityArchivalNamespaceDefaults{
+					State: config.ArchivalEnabled,
+					URI:   "testScheme://test/visibility/archive/path",
+				},
+			}
+		}
 	}
 }
 
@@ -177,18 +204,6 @@ func WithClusterHistoryTaskRecorder() TestClusterOption {
 func WithSharedCluster() TestClusterOption {
 	return func(params *TestClusterParams) {
 		params.SharedCluster = true
-	}
-}
-
-func WithCustomHistoryArchiverFactory(factory provider.CustomHistoryArchiverFactory) TestClusterOption {
-	return func(params *TestClusterParams) {
-		params.CustomHistoryArchiverFactory = factory
-	}
-}
-
-func WithCustomVisibilityArchiverFactory(factory provider.CustomVisibilityArchiverFactory) TestClusterOption {
-	return func(params *TestClusterParams) {
-		params.CustomVisibilityArchiverFactory = factory
 	}
 }
 
@@ -300,20 +315,20 @@ func (s *FunctionalTestBase) setupCluster(options ...TestClusterOption) {
 		HistoryConfig: HistoryConfig{
 			NumHistoryShards: cmp.Or(params.NumHistoryShards, 4),
 		},
-		DCRedirectionPolicy:             params.DCRedirectionPolicy,
-		DynamicConfigOverrides:          params.DynamicConfigOverrides,
-		EnableMetricsCapture:            true,
-		EnableArchival:                  params.ArchivalEnabled,
-		EnableMTLS:                      params.EnableMTLS,
-		EnableHistoryTaskRecorder:       params.EnableHistoryTaskRecorder,
-		CustomHistoryArchiverFactory:    params.CustomHistoryArchiverFactory,
-		CustomVisibilityArchiverFactory: params.CustomVisibilityArchiverFactory,
-		WorkerConfig:                    WorkerConfig{DisableWorker: !params.EnableWorkerService},
+		DCRedirectionPolicy:       params.DCRedirectionPolicy,
+		DynamicConfigOverrides:    params.DynamicConfigOverrides,
+		EnableMetricsCapture:      true,
+		EnableMTLS:                params.EnableMTLS,
+		EnableHistoryTaskRecorder: params.EnableHistoryTaskRecorder,
+		ConfigureServer:           params.ConfigureServer,
+		AdditionalServerOptions:   params.AdditionalServerOptions,
+		WorkerConfig:              WorkerConfig{DisableWorker: !params.EnableWorkerService},
 	}
 
 	// Apply configuration for shared clusters.
 	if params.SharedCluster {
-		s.testClusterConfig.Persistence = sharedClusterPersistence(GetPersistenceTestDefaults())
+		// Use file-based SQLite for shared clusters to support parallel test access.
+		s.testClusterConfig.Persistence = *persistencetests.GetSQLiteFileTestClusterOption()
 		s.isShared = true
 	}
 
@@ -342,14 +357,6 @@ func (s *FunctionalTestBase) setupCluster(options ...TestClusterOption) {
 	s.externalNamespace = namespace.Name(RandomizeStr("external-namespace"))
 	_, err = s.RegisterNamespace(s.ExternalNamespace(), 1, enumspb.ARCHIVAL_STATE_DISABLED, "", "")
 	s.Require().NoError(err)
-}
-
-func sharedClusterPersistence(defaults persistencetests.TestBaseOptions) persistencetests.TestBaseOptions {
-	if defaults.StoreType == config.StoreTypeSQL && defaults.SQLDBPluginName == sqlite.PluginName {
-		// Use file-based SQLite for shared clusters to support parallel test access.
-		return *persistencetests.GetSQLiteFileTestClusterOption()
-	}
-	return defaults
 }
 
 // All test suites that inherit FunctionalTestBase and overwrite SetupTest must
@@ -735,7 +742,7 @@ func (s *FunctionalTestBase) SendSignal(nsName string, execution *commonpb.Workf
 // RegisterTest records t as currently using this cluster. At t's Cleanup it
 // fails t if the cluster was poisoned during t's window. This fails all active tests
 // currently running. The cluster will be torn down if t was the last active test on a poisoned cluster.
-// The cluster pool's slot reference is replaced as soon as poison is observed.
+// The pool's slot reference is replaced as soon as poison is observed.
 func (s *FunctionalTestBase) RegisterTest(t testlogger.CleanupCapableT) {
 	if s.t != nil {
 		s.t.addTest(t)

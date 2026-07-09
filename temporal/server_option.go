@@ -18,6 +18,7 @@ import (
 	"go.temporal.io/server/common/rpc/auth"
 	"go.temporal.io/server/common/rpc/encryption"
 	"go.temporal.io/server/common/searchattribute"
+	"go.temporal.io/server/common/testing/testhooks"
 	"google.golang.org/grpc"
 )
 
@@ -177,6 +178,22 @@ func WithCustomVisibilityArchiverFactory(factory provider.CustomVisibilityArchiv
 func WithClientFactoryProvider(clientFactoryProvider client.FactoryProvider) ServerOption {
 	return applyFunc(func(s *serverOptions) {
 		s.clientFactoryProvider = clientFactoryProvider
+	})
+}
+
+// WithPersistenceFactoryProvider sets a custom PersistenceFactoryProvider.
+// NOTE: this option is experimental and may be changed or removed in future release.
+func WithPersistenceFactoryProvider(persistenceFactoryProvider persistenceclient.FactoryProviderFn) ServerOption {
+	return applyFunc(func(s *serverOptions) {
+		s.persistenceFactoryProvider = persistenceFactoryProvider
+	})
+}
+
+// WithTestHooks sets custom test hooks.
+// NOTE: this option is only for testing purposes and not for production use.
+func WithTestHooks(testHooks testhooks.TestHooks) ServerOption {
+	return applyFunc(func(s *serverOptions) {
+		s.testHooks = &testHooks
 	})
 }
 
